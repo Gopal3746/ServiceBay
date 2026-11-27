@@ -1,13 +1,13 @@
-from uuid import uuid4
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from fastapi import APIRouter, HTTPException, status
-
+from app.db.database import get_db
+from app.db.models import Repair
 from app.models.repair import RepairCreate, RepairResponse
 
-router = APIRouter(prefix="/repairs", tags=["repairs"])
 
-repairs: dict[str, RepairResponse] = {}
-repair_keys: dict[tuple[str, str], str] = {}
+router = APIRouter(prefix="/repairs", tags=["repairs"])
 
 
 @router.post(
@@ -15,30 +15,33 @@ repair_keys: dict[tuple[str, str], str] = {}
     response_model=RepairResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_repair(payload: RepairCreate):
-    key = (payload.dealership_id, payload.repair_order_id)
+def create_repair(
+    payload: RepairCreate,
+    db: Session = Depends(get_db),
+):
+    repair = Repair(**payload.model_dump())
 
-    if key in repair_keys:
+    db.add(repair)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
         raise HTTPException(
             status_code=409,
             detail="Repair order already exists for this dealership",
         )
 
-    repair = RepairResponse(
-        **payload.model_dump(),
-        id=str(uuid4()),
-        status="received",
-    )
-
-    repairs[repair.id] = repair
-    repair_keys[key] = repair.id
-
+    db.refresh(repair)
     return repair
 
 
 @router.get("/{repair_id}", response_model=RepairResponse)
-def get_repair(repair_id: str):
-    repair = repairs.get(repair_id)
+def get_repair(
+    repair_id: str,
+    db: Session = Depends(get_db),
+):
+    repair = db.get(Repair, repair_id)
 
     if repair is None:
         raise HTTPException(
